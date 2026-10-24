@@ -1,0 +1,84 @@
+# PostgreSQL - private database owned by the Order Service (database-per-service pattern)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: order-db-secret
+  namespace: foodexpress
+type: Opaque
+stringData:
+  POSTGRES_DB: orderdb
+  POSTGRES_USER: orderuser
+  POSTGRES_PASSWORD: orderpass
+  DATABASE_URL: postgresql://orderuser:orderpass@order-postgres:5432/orderdb
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: order-postgres-pvc
+  namespace: foodexpress
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-postgres
+  namespace: foodexpress
+  labels:
+    app: order-postgres
+    tier: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-postgres
+  template:
+    metadata:
+      labels:
+        app: order-postgres
+        tier: database
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom: { secretKeyRef: { name: order-db-secret, key: POSTGRES_DB } }
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: order-db-secret, key: POSTGRES_USER } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: order-db-secret, key: POSTGRES_PASSWORD } }
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: order-postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-postgres
+  namespace: foodexpress
+spec:
+  selector:
+    app: order-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
